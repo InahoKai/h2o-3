@@ -32,6 +32,7 @@ public class DeepLearning extends ModelBuilder<DeepLearningModel,DeepLearningMod
   public DeepLearning( DeepLearningParameters parms ) { super(parms); init(false); }
   public DeepLearning( DeepLearningParameters parms, Key<DeepLearningModel> key ) { super(parms,key); init(false); }
   public DeepLearning( boolean startup_once ) { super(new DeepLearningParameters(),startup_once); }
+  DeepLearningModel.DeepLearningParameters actualAutoParms;
 
   /** Types of models we can build with DeepLearning  */
   @Override public ModelCategory[] can_build() {
@@ -203,6 +204,8 @@ public class DeepLearning extends ModelBuilder<DeepLearningModel,DeepLearningMod
   public class DeepLearningDriver extends Driver {
     @Override public void computeImpl() {
       init(true); //this can change the seed if it was set to -1
+      //actual default values of AUTO params determined during DL model training will be saved here
+      actualAutoParms = (DeepLearningParameters) _parms.clone();
       long cs = _parms.checksum();
       // Something goes wrong
       if (error_count() > 0)
@@ -211,6 +214,14 @@ public class DeepLearning extends ModelBuilder<DeepLearningModel,DeepLearningMod
       //check that _parms isn't changed during DL model training
       long cs2 = _parms.checksum();
       assert(cs == cs2);
+      setDefaultParam();
+    }
+    
+    void setDefaultParam(){
+      _parms._distribution = actualAutoParms._distribution;
+      _parms._stopping_metric = actualAutoParms._stopping_metric;
+      _parms._categorical_encoding = actualAutoParms._categorical_encoding;
+      _parms._fold_assignment = actualAutoParms._fold_assignment;
     }
 
     /**
@@ -302,6 +313,7 @@ public class DeepLearning extends ModelBuilder<DeepLearningModel,DeepLearningMod
           if (cp != null) cp.unlock(_job);
         }
       }
+      initDefaultParam(cp);
       trainModel(cp);
       for (Key k : removeMe) DKV.remove(k);
 
@@ -324,6 +336,36 @@ public class DeepLearning extends ModelBuilder<DeepLearningModel,DeepLearningMod
         }
       } finally {
         Scope.exit(keep.toArray(new Key[keep.size()]));
+      }
+    }
+    
+    void initDefaultParam(DeepLearningModel deepLearningModel) {
+      actualAutoParms._distribution = deepLearningModel._dist._family;
+      if (_parms._stopping_metric == ScoreKeeper.StoppingMetric.AUTO){
+        if (_parms._stopping_rounds == 0){
+          actualAutoParms._stopping_metric = null;
+        } else {
+          if (deepLearningModel._output.isClassifier()) {
+            actualAutoParms._stopping_metric = ScoreKeeper.StoppingMetric.logloss;
+          } else if (!deepLearningModel.isSupervised()) {
+            actualAutoParms._stopping_metric = ScoreKeeper.StoppingMetric.MSE;
+          } else {
+            actualAutoParms._stopping_metric = ScoreKeeper.StoppingMetric.deviance;
+          }
+        }
+      }
+      if (_parms._categorical_encoding == Model.Parameters.CategoricalEncodingScheme.AUTO) {
+        if (deepLearningModel._output.nclasses() == 1)
+          actualAutoParms._categorical_encoding = null;
+        else
+          actualAutoParms._categorical_encoding = Model.Parameters.CategoricalEncodingScheme.OneHotInternal;
+      }
+      if (_parms._fold_assignment == Model.Parameters.FoldAssignmentScheme.AUTO) {
+        if (_parms._nfolds > 0 && _parms._fold_column == null){
+          actualAutoParms._fold_assignment = Model.Parameters.FoldAssignmentScheme.Random;
+        } else {
+          actualAutoParms._fold_assignment = null;
+        }
       }
     }
 
